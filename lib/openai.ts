@@ -1,4 +1,13 @@
-import OpenAI from 'openai'
-export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-if (!process.env.OPENAI_API_KEY) console.warn('Missing OPENAI_API_KEY')
-if (!process.env.OPENAI_ASSISTANT_ID) console.warn('Missing OPENAI_ASSISTANT_ID')
+import OpenAI from "openai";
+
+export const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+  defaultHeaders: { "OpenAI-Beta": "assistants=v2" },
+});
+
+if (!process.env.OPENAI_API_KEY) {
+  console.warn("Missing OPENAI_API_KEY");
+}
+if (!process.env.OPENAI_ASSISTANT_ID) {
+  console.warn("Missing OPENAI_ASSISTANT_ID");
+}
