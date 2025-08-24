@@ -1,44 +1,50 @@
-import { NextRequest } from 'next/server'
-import { openai } from '@/lib/openai'
-import { z } from 'zod'
+// app/api/chat/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+import { NextResponse } from "next/server";
+import { openai } from "@/lib/openai";
 
-const Body = z.object({
-  message: z.string().min(1),
-  threadId: z.string().optional()
-})
+export async function POST(req: Request) {
+  try {
+    const { message } = await req.json();
+    const assistantId = process.env.OPENAI_ASSISTANT_ID!;
+    if (!assistantId) return NextResponse.json({ error: "no_assistant" }, { status: 500 });
 
-export async function POST(req: NextRequest){
-  const body = await req.json()
-  const { message, threadId } = Body.parse(body)
-  const assistantId = process.env.OPENAI_ASSISTANT_ID as string
-  if(!assistantId) return new Response(JSON.stringify({ error: 'Missing OPENAI_ASSISTANT_ID' }), { status: 500 })
+    // 1) create thread
+    const thread = await openai.beta.threads.create();
 
-  const thread = threadId ? { id: threadId } : await openai.beta.threads.create()
+    // 2) add user message
+    await openai.beta.threads.messages.create(thread.id, {
+      role: "user",
+      content: message ?? "",
+    });
 
-  await openai.beta.threads.messages.create(thread.id, { role: 'user', content: message })
+    // 3) run assistant
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: assistantId,
+    });
 
-  const run = await openai.beta.threads.runs.create(thread.id, { assistant_id: assistantId })
-
-  let status = run.status
-  const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
-  let tries = 50
-  while(!['completed','failed','cancelled'].includes(status) && tries-- > 0){
-    await sleep(800)
-    const r = await openai.beta.threads.runs.retrieve(thread.id, run.id)
-    status = r.status
-    if(status === 'requires_action'){
-      await openai.beta.threads.runs.cancel(thread.id, run.id)
-      status = 'cancelled'
+    // 4) poll until completed
+    let status = run.status;
+    while (!["completed", "failed", "cancelled"].includes(status)) {
+      await new Promise(r => setTimeout(r, 1000));
+      const r2 = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+      status = r2.status;
     }
-  }
+    if (status !== "completed") {
+      console.error("RUN_STATUS", status);
+      return NextResponse.json({ error: "run_failed" }, { status: 500 });
+    }
 
-  const msgs = await openai.beta.threads.messages.list(thread.id, { order: 'desc', limit: 10 })
-  const assistantMsg = msgs.data.find(m => m.role === 'assistant')
-  let reply = ''
-  if(assistantMsg){
-    const parts = assistantMsg.content.map((c:any)=> c.type === 'text' ? c.text.value : '').filter(Boolean)
-    reply = parts.join('\n').trim()
-  }
+    // 5) read assistant message
+    const msgs = await openai.beta.threads.messages.list(thread.id, { order: "desc", limit: 10 });
+    const first = msgs.data.find(m => m.role === "assistant");
+    const text =
+      first?.content?.[0]?.type === "text" ? first.content[0].text.value : "(no reply)";
 
-  return new Response(JSON.stringify({ threadId: thread.id, reply }), { headers: { 'Content-Type': 'application/json' } })
+    return NextResponse.json({ text });
+  } catch (e: any) {
+    console.error("CHAT_ERROR", e?.status, e?.message, await e?.response?.text?.());
+    return NextResponse.json({ error: "server_error" }, { status: 500 });
+  }
 }
